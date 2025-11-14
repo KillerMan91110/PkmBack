@@ -948,7 +948,7 @@ def gacha_roll(request):
             pp_max=move.pp or 35,
         )
 
-    # 13) Sprites (normal + shiny)
+    # 13) Sprites (normal + shiny
     normal_sprite = species.sprite
     if "/pokemon/" in normal_sprite:
         shiny_sprite = normal_sprite.replace("/pokemon/", "/pokemon/shiny/")
