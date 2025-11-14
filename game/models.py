@@ -258,3 +258,33 @@ class PokemonCurrentMove(models.Model):
     def __str__(self):
         return f"{self.pokemon.nickname} - {self.move.name}"
 
+
+# models.py
+
+class GachaBox(models.Model):
+    name = models.CharField(max_length=100)
+    price = models.IntegerField(default=0)
+    description = models.TextField(blank=True)
+    banner = models.URLField(blank=True, null=True)
+    category = models.CharField(max_length=50, default="General")
+    available = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.name
+
+
+class GachaPool(models.Model):
+    box = models.ForeignKey(GachaBox, on_delete=models.CASCADE, related_name="pool")
+    species = models.ForeignKey(PokemonSpecies, on_delete=models.CASCADE)
+    rarity = models.CharField(max_length=20, choices=[
+        ("common", "Comun"),
+        ("rare", "Rara"),
+        ("epic", "Épica"),
+        ("legendary", "Legendaria"),
+        ("shiny", "Shiny"),
+    ])
+    shiny_chance = models.FloatField(default=0.01)
+    probability = models.FloatField(default=0.0)
+
+    def __str__(self):
+        return f"{self.species.name} ({self.rarity})"

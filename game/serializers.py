@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Pokemon, Item, PokemonSpecies, get_nature_data, ItemTemplate, Shop,Move, PokemonMove, PokemonCurrentMove
+from .models import User, Pokemon, Item, PokemonSpecies, get_nature_data, ItemTemplate, Shop,Move, PokemonMove, PokemonCurrentMove, GachaBox,GachaPool
 
 # Serializer para registro de usuario
 class RegisterSerializer(serializers.ModelSerializer):
@@ -116,3 +116,32 @@ class PokemonCurrentMoveSerializer(serializers.ModelSerializer):
             'move',
             'pp_current',
             'pp_max']
+
+
+# serializers.py
+class GachaPoolSerializer(serializers.ModelSerializer):
+    species_name = serializers.CharField(source="species.name", read_only=True)
+    sprite = serializers.CharField(source="species.sprite", read_only=True)
+    
+
+    class Meta:
+        model = GachaPool
+        fields = ["id", "species_name", "sprite", "rarity", "shiny_chance", "probability"]
+
+
+
+class GachaBoxSerializer(serializers.ModelSerializer):
+    pool = GachaPoolSerializer(many=True, read_only=True)
+    rarity_breakdown = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GachaBox
+        fields = ["id", "name", "price", "description", "banner", "category", "pool", "rarity_breakdown"]
+
+    def get_rarity_breakdown(self, obj):
+        agg = {}
+        for p in obj.pool.all():
+            agg[p.rarity] = agg.get(p.rarity, 0) + p.probability
+        # redondear a 2 decimales
+        return {k: round(v, 2) for k, v in agg.items()}
+

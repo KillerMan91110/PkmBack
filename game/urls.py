@@ -21,6 +21,10 @@ from .views import (
     buy_item,
     throw_ball,
     get_user_pokemons,
+    currency_view,
+    gacha_boxes,
+    gacha_box_detail,
+    gacha_roll,
     
 )
 
@@ -61,5 +65,11 @@ urlpatterns = [
         PokemonCurrentMoveViewSet.as_view({'get': 'list'}),
         name='pokemon-current-moves-by-pokemon'
     ),
+
+    path("currency/", currency_view, name="currency"),
+    path("gacha/boxes/", gacha_boxes, name="gacha_boxes"),
+    path("gacha/boxes/<int:pk>/", gacha_box_detail, name="gacha_box_detail"),
+    path("gacha/roll/", gacha_roll, name="gacha_roll"),
+
 
 ]

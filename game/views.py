@@ -22,7 +22,9 @@ from .serializers import (
     Shop,
     MoveSerializer,
     PokemonMoveSerializer,
-    PokemonCurrentMoveSerializer
+    PokemonCurrentMoveSerializer,
+    GachaBox,
+    GachaPool
 )
 from game import models
 
@@ -344,11 +346,11 @@ def choose_starter(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def get_csrf(request):
-    """
-    Devuelve un token CSRF en JSON.
-    """
-    token = get_token(request)
-    return Response({"csrfToken": token})
+        token = get_token(request)
+        response = Response({"csrfToken": token})
+        response.set_cookie("csrftoken", token, samesite="Lax")
+        return response
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -789,3 +791,186 @@ class PokemonCurrentMoveViewSet(viewsets.ModelViewSet):
         if pokemon_id:
             return self.queryset.filter(pokemon_id=pokemon_id)
         return self.queryset
+    
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def currency_view(request):
+    user = request.user
+    return Response({"pokediamonds": user.pokediamonds})
+
+
+# views.py
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def gacha_boxes(request):
+    """Devuelve la lista de cofres"""
+    from .serializers import GachaBoxSerializer
+    boxes = GachaBox.objects.filter(available=True)
+    serializer = GachaBoxSerializer(boxes, many=True)
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def gacha_box_detail(request, pk):
+    """Devuelve los detalles y el pool del cofre"""
+    from .serializers import GachaBoxSerializer
+    try:
+        box = GachaBox.objects.get(pk=pk)
+    except GachaBox.DoesNotExist:
+        return Response({"error": "Caja no encontrada"}, status=404)
+    serializer = GachaBoxSerializer(box)
+    return Response(serializer.data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def gacha_roll(request):
+    """
+    Realiza una tirada en un gacha box.
+    Espera: { "box_id": <id de la box> }
+    """
+    user = request.user
+    box_id = request.data.get("box_id")
+
+    if not box_id:
+        return Response({"error": "Falta box_id"}, status=400)
+
+    # 1) Buscar box
+    try:
+        box = GachaBox.objects.get(id=box_id, available=True)
+    except GachaBox.DoesNotExist:
+        return Response({"error": "Caja no encontrada"}, status=404)
+
+    # 2) Verificar saldo
+    if user.pokediamonds < box.price:
+        return Response({"error": "No tienes suficientes PokéDiamonds"}, status=400)
+
+    # 3) Descontar saldo
+    user.pokediamonds -= box.price
+    user.save(update_fields=["pokediamonds"])
+
+    # 4) Obtener pool
+    pool = list(box.pool.all())
+    if not pool:
+        return Response({"error": "La caja no tiene pool configurado"}, status=500)
+
+    # 5) Elegir entrada según probability
+    choices = [p for p in pool]
+    weights = [p.probability for p in pool]
+    selected = random.choices(choices, weights=weights, k=1)[0]
+
+    species = selected.species
+
+    # 6) ¿Shiny?
+    shiny = random.random() < selected.shiny_chance
+
+    # 7) Nivel, IVs, naturaleza
+    level = random.randint(5, 10)
+    ivs = {stat: random.randint(1, 31) for stat in ["hp", "attack", "defense", "spAttack", "spDefense", "speed"]}
+
+    all_natures = [
+        "Adamant", "Bashful", "Bold", "Brave", "Calm", "Careful", "Docile",
+        "Gentle", "Hardy", "Hasty", "Impish", "Jolly", "Lax", "Lonely",
+        "Mild", "Modest", "Naive", "Naughty", "Quiet", "Quirky", "Rash",
+        "Relaxed", "Sassy", "Serious", "Timid"
+    ]
+    nature = random.choice(all_natures)
+
+    # 8) Género según gender_rate
+    gender_rate = species.gender_rate
+    if gender_rate == -1:
+        gender = "genderless"
+    elif gender_rate == 0:
+        gender = "male"
+    elif gender_rate == 8:
+        gender = "female"
+    else:
+        female_chance = (gender_rate / 8) * 100
+        gender = random.choices(
+            ["female", "male"],
+            weights=[female_chance, 100 - female_chance],
+            k=1
+        )[0]
+
+    # 9) Determinar slot / PC
+    team_count = Pokemon.objects.filter(user=user, active=True).count()
+    if team_count < 6:
+        slot = team_count + 1
+        slot_pc = 0
+        active = True
+    else:
+        slot = 0
+        slot_pc = (Pokemon.objects.filter(user=user, active=False).aggregate(max_pc=Max("slot_pc"))["max_pc"] or 0) + 1
+        active = False
+
+    # 10) Crear Pokémon base
+    pokemon = Pokemon.objects.create(
+        user=user,
+        species=species,
+        nickname=species.name,
+        shiny=shiny,
+        level=level,
+        ivs=ivs,
+        nature=nature,
+        gender=gender,
+        stats={},         # se rellenan con calculate_stats
+        current_hp=0,     # se ajusta luego
+        active=active,
+        slot=slot,
+        slot_pc=slot_pc,
+    )
+
+    # 11) Calcular stats completas
+    stats = pokemon.calculate_stats()  # este método ya hace save() interno
+    # current_hp ya se ajusta dentro de calculate_stats
+
+    # 12) Asignar movimientos por nivel
+    possible_moves = (
+        PokemonMove.objects.filter(
+            species=species,
+            learn_method__in=["level-up"],
+            level_learned_at__lte=level
+        )
+        .order_by("-level_learned_at")
+    )
+
+    selected_moves = list(possible_moves[:4])
+
+    for i, move_rel in enumerate(selected_moves, start=1):
+        move = move_rel.move
+        PokemonCurrentMove.objects.create(
+            pokemon=pokemon,
+            move=move,
+            slot=i,
+            pp_current=move.pp or 35,
+            pp_max=move.pp or 35,
+        )
+
+    # 13) Sprites (normal + shiny)
+    normal_sprite = species.sprite
+    if "/pokemon/" in normal_sprite:
+        shiny_sprite = normal_sprite.replace("/pokemon/", "/pokemon/shiny/")
+    else:
+        shiny_sprite = normal_sprite
+
+    return Response({
+        "message": f"Has obtenido a {species.name}!",
+        "pokemon": {
+            "id": pokemon.id,
+            "species": species.name,
+            "level": pokemon.level,
+            "shiny": pokemon.shiny,
+            "gender": pokemon.gender,
+            "nature": pokemon.nature,
+            "ivs": pokemon.ivs,
+            "stats": pokemon.stats,
+            "slot": pokemon.slot,
+            "slot_pc": pokemon.slot_pc,
+            "active": pokemon.active,
+            "sprite": normal_sprite,
+            "sprite_shiny": shiny_sprite,
+        },
+        "new_balance": user.pokediamonds,
+    }, status=200)
